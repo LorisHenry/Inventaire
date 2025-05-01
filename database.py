@@ -55,6 +55,7 @@ class Database:
                     category TEXT,
                     location TEXT,
                     description TEXT,
+                    image_path TEXT,
                     available BOOLEAN DEFAULT 1
                 )
                 ''')
@@ -63,7 +64,8 @@ class Database:
                 self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT UNIQUE NOT NULL
+                    username TEXT UNIQUE NOT NULL,
+                    password TEXT
                 )
                 ''')
 
@@ -95,13 +97,13 @@ class Database:
         else:
             _create_tables()
 
-    def add_item(self, code, name, category=None, location=None, description=None):
+    def add_item(self, code, name, category=None, location=None, description=None, image_path=None):
         """Add a new item to the inventory"""
         try:
             self.cursor.execute('''
-            INSERT INTO items (code, name, category, location, description)
-            VALUES (?, ?, ?, ?, ?)
-            ''', (code, name, category, location, description))
+            INSERT INTO items (code, name, category, location, description, image_path)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ''', (code, name, category, location, description, image_path))
             self.conn.commit()
             return True
         except sqlite3.Error as e:
@@ -126,7 +128,7 @@ class Database:
             print(f"Error getting items: {e}")
             return []
 
-    def add_user(self, username):
+    def add_user(self, username, password=None):
         """Add a new user or get existing user"""
         with self.__class__._lock:
             try:
@@ -138,7 +140,7 @@ class Database:
                     return user[0]  # Return existing user ID
 
                 # Add new user
-                self.cursor.execute('INSERT INTO users (username) VALUES (?)', (username,))
+                self.cursor.execute('INSERT INTO users (username, password) VALUES (?, ?)', (username, password))
                 self.conn.commit()
                 return self.cursor.lastrowid
             except sqlite3.Error as e:
@@ -157,6 +159,16 @@ class Database:
             return self.cursor.fetchone()
         except sqlite3.Error as e:
             print(f"Error getting user: {e}")
+            return None
+
+    def authenticate_user(self, username, password):
+        """Authenticate a user with username and password"""
+        try:
+            self.cursor.execute('SELECT id FROM users WHERE username = ? AND password = ?', (username, password))
+            user = self.cursor.fetchone()
+            return user[0] if user else None
+        except sqlite3.Error as e:
+            print(f"Error authenticating user: {e}")
             return None
 
     def borrow_item(self, user_id, item_code):
@@ -231,7 +243,7 @@ class Database:
             print(f"Error getting user borrowings: {e}")
             return []
 
-    def update_item(self, item_id, code, name, category=None, location=None, description=None):
+    def update_item(self, item_id, code, name, category=None, location=None, description=None, image_path=None):
         """Update an existing item in the inventory"""
         try:
             # Check if the code already exists for a different item
@@ -243,9 +255,9 @@ class Database:
 
             self.cursor.execute('''
             UPDATE items 
-            SET code = ?, name = ?, category = ?, location = ?, description = ?
+            SET code = ?, name = ?, category = ?, location = ?, description = ?, image_path = ?
             WHERE id = ?
-            ''', (code, name, category, location, description, item_id))
+            ''', (code, name, category, location, description, image_path, item_id))
             self.conn.commit()
             return True, "Item updated successfully"
         except sqlite3.Error as e:
@@ -294,6 +306,37 @@ class Database:
             return self.cursor.fetchall()
         except sqlite3.Error as e:
             print(f"Error getting borrowing history: {e}")
+            return []
+
+    def get_users_with_active_borrowings(self):
+        """Get all users who have active borrowings"""
+        try:
+            self.cursor.execute('''
+            SELECT DISTINCT u.id, u.username, COUNT(b.id) as borrow_count
+            FROM users u
+            JOIN borrowings b ON u.id = b.user_id
+            WHERE b.return_date IS NULL
+            GROUP BY u.id
+            ORDER BY u.username
+            ''')
+            return self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Error getting users with active borrowings: {e}")
+            return []
+
+    def get_borrowings_by_user(self, user_id):
+        """Get all borrowings for a specific user"""
+        try:
+            self.cursor.execute('''
+            SELECT b.id, i.code, i.name, i.category, b.borrow_date, b.return_date
+            FROM borrowings b
+            JOIN items i ON b.item_id = i.id
+            WHERE b.user_id = ?
+            ORDER BY b.borrow_date DESC
+            ''', (user_id,))
+            return self.cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"Error getting borrowings by user: {e}")
             return []
 
     def close(self):
